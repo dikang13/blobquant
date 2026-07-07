@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Virtual environments / package managers
+.venv/
+uv.lock.bak
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Large binary artifacts and local data - not tracked in git
+*.pytorch
+*.pth
+*.h5
+*.hdf5
+*.hd5
+*.tif
+*.tiff
+data/
+output/
+
+# Editors / OS
+.idea/
+.DS_Store

@@ -1,0 +1,4 @@
+CUDA_VISIBLE_DEVICES=3
+conda activate segnet
+cd /store1/candy/prj_immob
+python pytorch-3dunet/pytorch3dunet/predict.py --config ./model_inference.yaml
