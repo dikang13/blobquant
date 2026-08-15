@@ -16,14 +16,26 @@ For internals — device selection, sliding-window inference, repository layout 
 
 ## Installation
 
-Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.12. The segmentation network
-is vendored as a git submodule, so clone recursively. Copy and paste the whole block:
+You need:
+
+- [uv](https://docs.astral.sh/uv/) and Python ≥ 3.12.
+- **GitHub SSH access to `flavell-lab/private_pytorch-3dunet`.** The segmentation
+  network is vendored as a submodule pointing at that private lab repository over SSH,
+  so the recursive clone below fails at the submodule step without it. If you are
+  outside the lab, ask for read access and add an SSH key to your GitHub account first.
+
+Then copy and paste the whole block:
 
 ```bash
 git clone --recurse-submodules https://github.com/dikang13/blobquant.git
 cd blobquant
 uv sync
+uv run blobquant --help
 ```
+
+`uv sync` creates `.venv/` and installs everything, including the `pytorch-3dunet`
+submodule as an editable dependency. No conda environment is needed. The final line
+should print the usage message.
 
 If you already cloned without `--recurse-submodules`:
 
@@ -32,18 +44,16 @@ git submodule update --init --recursive
 uv sync
 ```
 
-`uv sync` creates `.venv/` and installs everything, including the `pytorch-3dunet`
-submodule as an editable dependency. No conda environment is needed.
+### Two things are not in the clone
 
-Finally, place the model weights `model_best_checkpoint.pytorch` (~780 MB) in the
-repository root. They are too large for git and are **not** included in the clone —
-ask the maintainer for a copy.
+Both are too large for git, so a fresh checkout has neither:
 
-Verify the install:
-
-```bash
-uv run blobquant --help
-```
+1. **The model weights**, `model_best_checkpoint.pytorch` (~780 MB). Place them in the
+   repository root; nothing will segment without them. Ask the maintainer for a copy.
+2. **The sample volumes** under `data/`. The use cases below refer to
+   `data/hdf5/worm_0_ch_red.h5` and `worm_0_ch_green.h5` as concrete examples —
+   substitute your own paths, or ask the maintainer for the samples if you want to
+   reproduce the output shown here exactly.
 
 ---
 
