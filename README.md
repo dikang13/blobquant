@@ -30,12 +30,15 @@ Then copy and paste the whole block:
 git clone --recurse-submodules https://github.com/dikang13/blobquant.git
 cd blobquant
 uv sync
+./scripts/fetch_weights.sh
 uv run blobquant --help
 ```
 
 `uv sync` creates `.venv/` and installs everything, including the `pytorch-3dunet`
-submodule as an editable dependency. No conda environment is needed. The final line
-should print the usage message.
+submodule as an editable dependency. No conda environment is needed.
+`fetch_weights.sh` downloads the 261 MB `model_weights.pytorch` and checks its
+SHA-256; it is a no-op if the file is already there, so re-running it is harmless.
+The final line should print the usage message.
 
 If you already cloned without `--recurse-submodules`:
 
@@ -44,16 +47,30 @@ git submodule update --init --recursive
 uv sync
 ```
 
-### Two things are not in the clone
+### The model weights
 
-Both are too large for git, so a fresh checkout has neither:
+`model_weights.pytorch` (261 MB) is over GitHub's 100 MB per-file limit, so it is
+**attached to a release** rather than committed, and `git clone` alone does not bring
+it. `./scripts/fetch_weights.sh` is the one extra step; it pulls the asset from
+[the `weights-v1` release](https://github.com/dikang13/blobquant/releases/tag/weights-v1)
+and verifies the checksum. Without it every run stops with:
 
-1. **The model weights**, `model_best_checkpoint.pytorch` (~780 MB). Place them in the
-   repository root; nothing will segment without them. Ask the maintainer for a copy.
-2. **The sample volumes** under `data/`. The use cases below refer to
-   `data/hdf5/worm_0_ch_red.h5` and `worm_0_ch_green.h5` as concrete examples —
-   substitute your own paths, or ask the maintainer for the samples if you want to
-   reproduce the output shown here exactly.
+```
+ERROR blobquant - No model weights found (looked for model_weights.pytorch and
+model_best_checkpoint.pytorch). Run ./scripts/fetch_weights.sh to download them.
+```
+
+Point `--checkpoint` anywhere else to use a different file. These weights are the
+original 783 MB training checkpoint with the optimizer state removed — see
+[`notes.md`](notes.md) — and produce bit-identical output, so an existing
+`model_best_checkpoint.pytorch` in the repository root is still picked up automatically.
+
+### The sample volumes are not in the clone either
+
+The use cases below refer to `data/hdf5/worm_0_ch_red.h5`, `worm_0_ch_green.h5` and the
+time series `data/cropped/worm2_2_*.h5` as concrete examples — substitute your own
+paths, or ask the maintainer for the samples if you want to reproduce the output shown
+here exactly.
 
 ---
 
@@ -61,7 +78,7 @@ Both are too large for git, so a fresh checkout has neither:
 
 ### 1. Segment every volume in `data/`
 
-With volumes in `data/` and the checkpoint in the repository root:
+With volumes in `data/` and the weights in the repository root:
 
 ```bash
 uv run blobquant
@@ -100,7 +117,7 @@ uv run blobquant data/cropped/worm2_2_red.h5 --dataset t2/channel0 -o output/
 | --- | --- | --- |
 | `inputs` | `data/` | Files or directories to segment |
 | `-o, --outdir` | `output/` | Where to write outputs |
-| `-c, --checkpoint` | `model_best_checkpoint.pytorch` | Model weights |
+| `-c, --checkpoint` | `model_weights.pytorch` | Model weights |
 | `--dataset` | autodetect | HDF5 dataset holding the volume |
 | `--device` | `auto` | `auto`, `cuda` or `cpu` |
 | `--gpu` | `3` | Physical GPU index to pin |
@@ -219,7 +236,56 @@ nearest ROI when a probe lands on background:
   background (no ROI); nearest is ROI 28 at 3.7 voxels
 ```
 
-### 7. Use the results in your own code
+### 7. Quantify a time series
+
+An immobilised recording stores one 3D volume per frame, e.g. `t0/channel0` …
+`t4/channel0`. Blobs barely move between frames, so the volume is segmented **once**
+and the same ROIs are reused for every timepoint. Inspect an unfamiliar file first:
+
+```bash
+uv run python examples/timeseries_traces.py --list data/cropped/worm2_2_red.h5
+```
+
+```
+Structure of data/cropped/worm2_2_red.h5:
+  Group:   t0
+  Dataset: t0/channel0 | shape (64, 120, 284) | dtype uint16
+  ...
+```
+
+Then segment one frame and quantify all of them:
+
+```bash
+# 1. Segment a single timepoint of the red channel.
+uv run blobquant data/cropped/worm2_2_red.h5 --dataset t0/channel0 -o output/
+
+# 2. Sum both channels inside those ROIs, frame by frame.
+uv run python examples/timeseries_traces.py \
+    --prediction output/worm2_2_red_prediction.h5 \
+    --red   data/cropped/worm2_2_red.h5 \
+    --green data/cropped/worm2_2_green.h5 \
+    -o output/
+```
+
+```
+162 ROIs x 5 timepoints
+  median green/red ratio: 1.6593
+  ratio range:            0.0797 - 6.2142
+  most variable ROIs (CV of the trace):
+    ROI    7 ( 121 vox)  CV=0.213  [2.051 1.668 1.353 1.153 1.298]
+    ROI  147 ( 181 vox)  CV=0.148  [1.568 1.429 1.450 1.851 2.065]
+```
+
+Writes `worm2_2_red_traces.csv` — one row per ROI per timepoint, with the voxel count,
+both background-subtracted channel sums and their ratio — and `worm2_2_red_traces.png`,
+showing every trace as a per-ROI–normalised heatmap alongside the most variable ones as
+line plots. Pass `--roi 7 147` to plot chosen ROIs instead.
+
+Background is estimated per frame at the `--bkg-percentile` (default 20th) of each
+channel; `--bkg first` instead fixes it from the first frame. Use `--channel` if the
+frames are not named `channel0`.
+
+### 8. Use the results in your own code
 
 ```python
 import h5py, numpy as np
@@ -240,4 +306,4 @@ is the mask for blob *k*. Because `labels` is a plain integer volume, looking up
 ROI at a coordinate is a single array index, not a search.
 
 To extend this to a time series, load each timepoint and reuse the same `labels`
-volume — see `check_images.ipynb` for the prototype of that analysis.
+volume — `examples/timeseries_traces.py` (use case 7) does exactly that.

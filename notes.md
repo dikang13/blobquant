@@ -38,6 +38,33 @@ This was confirmed empirically on a 4-GPU host:
 Legacy `*_predictions.h5` files produced by the old multi-GPU path hold logits, and
 thresholding those at `0.5` is not a probability cut — it corresponds to p ≈ 0.62.
 
+## What is in the checkpoint
+
+The file the training loop saved, `model_best_checkpoint.pytorch`, is 783 MB — three
+times the size of the network. Most of it is Adam's per-parameter momentum, which only
+matters if you intend to resume training:
+
+| Contents | Size |
+| --- | --- |
+| `model_state_dict` (44 tensors, float32) | 261 MB |
+| `optimizer_state_dict` (`exp_avg`, `exp_avg_sq`) | 522 MB |
+
+`scripts/strip_checkpoint.py` drops the optimizer state and the training bookkeeping
+(`h5_dir`, `max_num_iterations`, …), keeping the weights plus the scalars that identify
+the run — epoch 527, `best_eval_score` 0.885. The result is what is published as
+`model_weights.pytorch`; on the sample volume it reproduces the original mask, labels
+and probabilities exactly (max absolute difference 0.0).
+
+`--half` stores the weights as float16 for a further 2× (130 MB). That is *not* what is
+published: it changes 5 voxels out of 2 181 120 on the sample volume — the same 166
+blobs, but no longer bit-identical.
+
+Neither variant fits GitHub's 100 MB per-file limit, so the weights ride along as a
+release asset fetched by `scripts/fetch_weights.sh`. Git LFS would let a plain
+`git clone` bring them, but GitHub Free allows only 1 GiB of LFS traffic per month —
+roughly four clones of a 261 MB file — after which downloads fail until the quota
+resets. Release assets have no such cap.
+
 ## Sliding-window inference
 
 If the volume is larger than `--patch`, it is tiled with `--overlap` between windows.
@@ -91,9 +118,15 @@ src/blobquant/
 examples/
   visualize_result.py          projections, ROI size distribution, 3D ROI locator
   apply_red_mask_to_green.py   two-channel mask transfer + ROI lookup demo
+  timeseries_traces.py         per-ROI green/red traces across timepoints
 data/hdf5/
   worm_0_ch_red.h5    red/marker channel (network input)
   worm_0_ch_green.h5  green/activity channel, co-registered with the red
+data/cropped/
+  worm2_2_{red,green}.h5  five-timepoint series, one volume per t<N>/channel0 group
+scripts/
+  fetch_weights.sh       download model_weights.pytorch from the GitHub release
+  strip_checkpoint.py    shrink a training checkpoint to inference weights
 pytorch-3dunet/       vendored network (git submodule)
 model_inference.yaml  legacy config for the upstream predict.py; optional --config source
 ```
@@ -105,5 +138,10 @@ Pass `--config model_inference.yaml` to override it from YAML.
 pipeline and holds logits rather than probabilities; it is kept only for reference and
 is skipped when scanning directories.
 
-`check_images.ipynb` is the original notebook prototype, kept for reference to the
-time-series quantification it demonstrates.
+## Reusing ROIs across timepoints
+
+`timeseries_traces.py` segments one frame and applies those labels to every frame,
+rather than segmenting each frame independently. This is deliberate: ROI *k* must mean
+the same cell at every timepoint for a trace to exist at all, and independent
+segmentations do not produce corresponding label numbers. It assumes the recording is
+immobilised — for a moving sample the labels would need tracking between frames.

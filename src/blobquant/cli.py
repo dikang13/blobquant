@@ -12,7 +12,10 @@ from blobquant.device import DEFAULT_GPU, configure_visible_devices, select_devi
 
 logger = logging.getLogger("blobquant")
 
-DEFAULT_CHECKPOINT = "model_best_checkpoint.pytorch"
+# The published weights, then the name of the original training checkpoint, which
+# older working copies still have on disk.
+DEFAULT_CHECKPOINTS = ("model_weights.pytorch", "model_best_checkpoint.pytorch")
+DEFAULT_CHECKPOINT = DEFAULT_CHECKPOINTS[0]
 DEFAULT_INDIR = "data"
 DEFAULT_OUTDIR = "output"
 
@@ -41,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "-c", "--checkpoint", default=DEFAULT_CHECKPOINT,
-        help=f"Model weights (default: {DEFAULT_CHECKPOINT}).",
+        help=f"Model weights (default: the first of {', '.join(DEFAULT_CHECKPOINTS)} present).",
     )
     parser.add_argument(
         "--config", default=None,
@@ -85,6 +88,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Debug logging.")
     return parser
+
+
+def resolve_checkpoint(requested: str) -> Path | None:
+    """Locate the weights file, or None if nothing usable is on disk.
+
+    An explicit ``--checkpoint`` is used as given. Left at the default, the
+    published ``model_weights.pytorch`` is preferred but a working copy that still
+    only has the original training checkpoint keeps working.
+    """
+    if requested != DEFAULT_CHECKPOINT:
+        path = Path(requested)
+        return path if path.exists() else None
+    for candidate in DEFAULT_CHECKPOINTS:
+        if Path(candidate).exists():
+            return Path(candidate)
+    return None
 
 
 def _process_one(path, model, device, final_sigmoid, args, inference, postprocess):
@@ -163,9 +182,14 @@ def main(argv=None) -> int:
         logger.error("No supported input volumes found.")
         return 2
 
-    checkpoint = Path(args.checkpoint)
-    if not checkpoint.exists():
-        logger.error("Checkpoint not found: %s (pass --checkpoint)", checkpoint)
+    checkpoint = resolve_checkpoint(args.checkpoint)
+    if checkpoint is None:
+        logger.error(
+            "No model weights found (looked for %s). Run ./scripts/fetch_weights.sh "
+            "to download them, or pass --checkpoint.",
+            " and ".join(DEFAULT_CHECKPOINTS) if args.checkpoint == DEFAULT_CHECKPOINT
+            else args.checkpoint,
+        )
         return 2
 
     from blobquant import inference, postprocess
@@ -174,8 +198,16 @@ def main(argv=None) -> int:
     model_config, config_checkpoint = inference.load_model_config(
         Path(args.config) if args.config else None
     )
+    # The config's model_path wins only if -c was left at the default, and only if it
+    # actually exists -- a stale path in a legacy config must not shadow real weights.
     if args.checkpoint == DEFAULT_CHECKPOINT and config_checkpoint:
-        checkpoint = Path(config_checkpoint)  # config wins only if -c was left default
+        if Path(config_checkpoint).exists():
+            checkpoint = Path(config_checkpoint)
+        else:
+            logger.warning(
+                "Ignoring model_path '%s' from the config: not found. Using %s.",
+                config_checkpoint, checkpoint,
+            )
     model, final_sigmoid = inference.build_model(model_config, checkpoint, device)
 
     # A recursive sweep can turn two same-named files in different folders into one
